@@ -1,9 +1,0 @@
-version: "3.9"
-services:
-  python-3-8:
-    build: .
-    network_mode: host
-    dns:
-      - 1.1.1.1
-    volumes:
-      - .:/srv/emu
