@@ -16,7 +16,7 @@
         "reward": 1.0
       },
       "xpos": {
-        "measurement": "absolute",
+        "measurement": "delta",
         "reward": 1.0
       }
     }
