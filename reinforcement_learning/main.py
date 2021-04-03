@@ -180,7 +180,7 @@ class Parameters:
 	mem_size = 25000
 
 	epsilon_min = 0.05
-	epsilon_decay = 0.001
+	epsilon_decay = 0.0001
 	epsilon = 1
 	discount_factor = 0.9
 	learning_rate = 0.001
@@ -192,6 +192,7 @@ class Parameters:
 	render = False
 	verbose = False
 	target = False
+	save = False
 	directory = None
 
 
@@ -238,7 +239,7 @@ class Runner:
 			self.agent.sync_models()
 
 	def save(self, ticks, avg_loss, score):
-		if self.param.directory is None:
+		if self.param.directory is None or not self.param.save:
 			return
 
 		if self.param.verbose:
@@ -345,6 +346,7 @@ def main(argv):
 				sys.exit(1)
 
 			param.directory = args[0]
+			param.save = True
 		elif opt == "--verbose":
 			param.verbose = True
 		elif opt == "--render":
