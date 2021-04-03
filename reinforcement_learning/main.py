@@ -187,7 +187,7 @@ class Parameters:
 	batch_size = 32
 	mem_size = 25000
 
-	epsilon_min = 0.05
+	epsilon_min = 0.1
 	epsilon_decay = 0.001
 	epsilon = 1
 	discount_factor = 0.9
