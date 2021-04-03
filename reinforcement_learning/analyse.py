@@ -47,6 +47,14 @@ def main(argv):
 	plt.title("Loss per episode")
 	plt.legend()
 
+	plt.figure()
+	plt.plot(data[:,0], data[:,2] / data[:,1], label="Raw")
+	plt.plot(data[:-4,0], mov_avg(data[:,2] / data[:,1], 5), label="5 episode moving average")
+	plt.xlabel("Episodes")
+	plt.ylabel("Score/ticks")
+	plt.title("Score per tick")
+	plt.legend()
+
 	plt.show()
 
 if __name__ == "__main__":
