@@ -16,6 +16,14 @@
       "address": 97,
       "type": "<u2"
     },
+    "ypos": {
+      "address": 105,
+      "type": "|u1"
+    },
+    "screenx": {
+      "address": 129,
+      "type": "<u2"
+    },
     "levelstate":{
       "address": 76,
       "type": "|i1"

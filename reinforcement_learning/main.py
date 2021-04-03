@@ -134,17 +134,16 @@ class Resampler:
 		return (0.299*arr[:, :, 0] + 0.587*arr[:, :, 1] + 0.114*arr[:, :, 2]) / 255
 
 	@staticmethod
-	def drop_sample(arr, n=2):
-		return arr[:185:n, ::n]
+	def drop_sample(arr, n=2, idx=(0, 50)):
+		return arr[:185:n, idx[0]:idx[1]:n]
 
 	@staticmethod
 	def reshape(arr):
 		return arr.reshape((1, arr.size))
 
 	@staticmethod
-	def total(arr):
-		#return Resampler.reshape(Resampler.gray(Resampler.drop_sample(arr)))
-		return Resampler.reshape(Resampler.drop_sample(arr) / 255)
+	def total(arr, idx=(0, 50)):
+		return Resampler.reshape(Resampler.gray(Resampler.drop_sample(arr, idx=idx)))
 
 
 class Reward:
@@ -167,12 +166,21 @@ class Reward:
 		if xpos == 0:
 			xpos = self.prev_x
 
-		new_score = 0.1*(xpos - self.prev_x) + (score - self.score)
+		new_score = (xpos - self.prev_x) + (score - self.score)
 
 		self.prev_x = xpos
 		self.score = score
 
 		return new_score
+
+	def compute_bounds(self, info):
+		size = 50
+		xcenter = info.get("xpos") - info.get("screenx")
+
+		xleft = np.maximum(0, int(xcenter - size/2))
+		xright = xleft + size
+
+		return xleft, xright
 
 
 class Parameters:
@@ -180,14 +188,14 @@ class Parameters:
 	mem_size = 25000
 
 	epsilon_min = 0.05
-	epsilon_decay = 0.0001
+	epsilon_decay = 0.001
 	epsilon = 1
 	discount_factor = 0.9
-	learning_rate = 0.001
+	learning_rate = 0.01
 
-	hold_down = 8
+	hold_down = 6
 
-	nodes = (256, 64)
+	nodes = (100, 25)
 
 	render = False
 	verbose = False
@@ -275,7 +283,7 @@ class Runner:
 
 					tick_reward += rew
 
-				next_state = Resampler.total(next_state)
+				next_state = Resampler.total(next_state, rew_handler.compute_bounds(info))
 
 				if info.get("deathstate") == 3 or ticks >= 250:
 					if info.get("deathstate") == 3:
@@ -292,7 +300,7 @@ class Runner:
 				ticks += 1
 
 				if self.param.verbose:
-					print(f"Action={action}, predicted_q={q_val}, tick_rew={tick_reward}, score={score}, info={info}, loss={loss}")
+					print(f"Action={action}, predicted_q={q_val}, tick_rew={tick_reward}, score={score}, info={info}, loss={loss}, deltax={info.get('xpos') - info.get('screenx')}")
 
 			if self.param.target and self.agent.mem.ready(self.param.batch_size):
 				self.agent.sync_models()
