@@ -15,6 +15,14 @@
     "xpos": {
       "address": 97,
       "type": "<u2"
+    },
+    "levelstate":{
+      "address": 76,
+      "type": "|i1"
+    },
+    "deathstate":{
+      "address": 102,
+      "type": "|i1"
     }
   }
 }

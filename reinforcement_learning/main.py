@@ -1,28 +1,30 @@
-#0x61-0x62 seems to be pos
-#score seems to be little endian, not big
-
-import random
-from collections import deque
+import sys
+import os
+import getopt
 
 import retro
 import numpy as np
 
-import tensorflow as tf
-from tensorflow.keras import Model, Sequential
-from tensorflow.keras.layers import Dense, Flatten, Embedding
-from tensorflow.keras.optimizers import Adam
+import tensorflow.keras as keras
 
-class Mem:
+class Memory:
 	def __init__(self, size, state_dim, action_dim):
 		self.mem_size = size
 		self.cnt = 0
-		self.rdy = False
+		self._rdy = False
+		self._full = False
 
-		self.state = np.zeros((self.mem_size, state_dim))
-		self.new_state = np.zeros((self.mem_size, state_dim))
+		self.state = np.zeros((self.mem_size, *state_dim))
+		self.new_state = np.zeros((self.mem_size, *state_dim))
 		self.action = np.zeros(self.mem_size, dtype="uint8")
-		self.reward = np.zeros(self.mem_size)
+		self.reward = np.zeros(self.mem_size, dtype="int32")
 		self.done = np.zeros(self.mem_size, dtype=bool)
+
+	def __len__(self):
+		if self._full:
+			return self.mem_size
+
+		return self.cnt
 
 	def store(self, state, action, reward, new_state, done):
 		self.state[self.cnt] = state
@@ -31,11 +33,14 @@ class Mem:
 		self.new_state[self.cnt] = new_state
 		self.done[self.cnt] = 1 - int(done)
 
-		self.cnt += 1
-		self.cnt %= self.mem_size
+		self.cnt = (self.cnt + 1) % self.mem_size
 
-	def read(self, amount):
-		keys = np.random.randint(0, self.cnt, size=amount)
+		if self.cnt == 0:
+			self._full = True
+
+	def read(self, amount, keys=None):
+		if keys is None:
+			keys = np.random.randint(0, len(self), size=amount)
 
 		states = self.state[keys]
 		actions = self.action[keys]
@@ -47,52 +52,53 @@ class Mem:
 
 	def ready(self, batch_size):
 		if self.cnt > batch_size:
-			self.rdy = True
+			self._rdy = True
 
-		return self.rdy
+		return self._rdy
 
-class Test:
-	#IDENT = np.identity(9, dtype=int)[6::]
-	#IDENT = np.identity(9, dtype=int)
-
-	def __init__(self, env, size):
-		mem_size = 100000
-
-		self.env = env
-
-		self.epsilon = 1
-		self.epsilon_decay = 0.001
-		self.gamma = 0.9
-
-		self.mem = Mem(mem_size, size, 9)
-
-		self.netw = self.build(size)
-		#self.target_netw = self.build(size)
-		#self.align()
-
-	def build(self, size):
-		model = Sequential([
-			#Embedding(size, 10, input_length=1),
-			Flatten(),
-			Dense(100, activation="relu"),
-			Dense(25, activation="relu"),
-			Dense(7, activation=None)
+class ModelBuilder:
+	def __init__(self, layer_nodes, input_dim, output_dim, \
+				lr=0.001, loss="mean_squared_error", activation="relu"):
+		self.model = keras.Sequential([
+			#keras.layers.Conv2D(64, (8, 8), activation=activation, input_shape=(*input_dim, 1)),
+			#keras.layers.MaxPool2D(),
+			#keras.layers.Conv2D(16, (4, 4), activation=activation),
+			#keras.layers.MaxPool2D(),
+			keras.layers.Flatten(input_shape=input_dim),
+			*[keras.layers.Dense(i, activation=activation) for i in layer_nodes],
+			keras.layers.Dense(output_dim, activation=None)
 		])
 
-		model.compile(optimizer=Adam(learning_rate=0.001), loss="mean_squared_error")
+		self.model.compile(optimizer=keras.optimizers.Adam(learning_rate=lr), loss=loss)
 
-		return model
 
-	#def align(self):
-	#	self.netw.set_weights(self.target_netw.get_weights())
+class Agent:
+	def __init__(self, param, env, model, dims=(None, None), target_model=None):
+		self.param = param
+		self.state_dim = dims[0]
+		self.action_dim = dims[1]
 
-	def action(self, state, episode):
-		if np.random.rand() <= np.maximum(0.01, self.epsilon - episode * self.epsilon_decay):
-			return random.randint(0, 7 - 1), None
+		self.env = env
+		self.model = model
+		self.target_model = target_model
+		self.mem = Memory(self.param.mem_size, self.state_dim, self.action_dim)
 
-		q = self.netw(state, training=False).numpy()
-		#return q.flatten() > self.activation_min
-		return np.argmax(q.flatten()), q.flatten()
+	def sync_models(self):
+		if self.target_model is None:
+			raise Exception("`target_model` not set, cannot sync weights")
+
+		self.target_model.set_weights(self.model.get_weights())
+
+	def action(self, state, epsilon = (0.01, 1)):
+		if np.random.rand() <= np.maximum(*epsilon):
+			return np.random.randint(self.action_dim), None
+
+		#state = state.reshape((*state.shape, 1))
+
+		q = self.model(state, training=False).numpy().flatten()
+		iq_max = np.argmax(q)
+
+		return iq_max, q[iq_max]
 
 	def train(self, batch_size):
 		if not self.mem.ready(batch_size):
@@ -100,23 +106,36 @@ class Test:
 
 		states, actions, rewards, new_states, done = self.mem.read(batch_size)
 
-		q_now = self.netw(states, training=False).numpy()
-		q_new = self.netw(new_states, training=False).numpy()
+		#states = states.reshape((*states.shape, 1))
+		#new_states = new_states.reshape((*states.shape, 1))
+
+		q_now = self.model.predict_on_batch(states)
+		if self.target_model is None:
+			q_new = self.model.predict_on_batch(new_states)
+		else:
+			q_new = self.target_model.predict_on_batch(new_states)
 
 		q_target = np.copy(q_now)
-		q_target[range(batch_size), actions] = rewards + self.gamma * np.max(q_new, axis=1) * done
+		q_target[range(batch_size), actions] = rewards + self.param.discount_factor * np.max(q_new, axis=1) * done
 
-		self.netw.train_on_batch(states, q_target)
+		if batch_size == self.param.batch_size:
+			return self.model.train_on_batch(states, q_target)
+		else:
+			return self.model.fit(states, q_target, batch_size=self.param.batch_size, verbose=self.param.verbose, workers=10, use_multiprocessing=True)
+
 
 class Resampler:
 	@staticmethod
 	def to_int(arr):
-		arr = arr.astype("uint32")
 		return (np.left_shift(arr[:, :, 0], 16) + np.left_shift(arr[:, :, 1], 8) + arr[:, :, 2]) / 0xFFFFFF
 
 	@staticmethod
+	def gray(arr):
+		return (0.299*arr[:, :, 0] + 0.587*arr[:, :, 1] + 0.114*arr[:, :, 2]) / 255
+
+	@staticmethod
 	def drop_sample(arr, n=2):
-		return arr[::n, ::n]
+		return arr[:185:n, ::n]
 
 	@staticmethod
 	def reshape(arr):
@@ -124,7 +143,8 @@ class Resampler:
 
 	@staticmethod
 	def total(arr):
-		return Resampler.reshape(Resampler.to_int(Resampler.drop_sample(arr)))
+		#return Resampler.reshape(Resampler.gray(Resampler.drop_sample(arr)))
+		return Resampler.reshape(Resampler.drop_sample(arr) / 255)
 
 
 class Reward:
@@ -143,98 +163,231 @@ class Reward:
 			self.score = score
 
 		# Prevent weird behaviour when dying
+		# (this should be handled by "deathstate", but just in case...)
 		if xpos == 0:
 			xpos = self.prev_x
 
-		new_score = (xpos - self.prev_x) + (score - self.score)
+		new_score = 0.1*(xpos - self.prev_x) + (score - self.score)
 
 		self.prev_x = xpos
 		self.score = score
 
 		return new_score
 
-def main():
-	# 6 = left
-	# 7 = right
-	# 8 = jump
-	action_space = np.array([
-		[0, 0, 0, 0, 0, 0, 0, 0, 0],
-		[0, 0, 0, 0, 0, 0, 0, 0, 1],
-		[0, 0, 0, 0, 0, 0, 0, 1, 0],
-		[0, 0, 0, 0, 0, 0, 1, 0, 0],
-		[0, 0, 0, 0, 0, 1, 0, 0, 0],
-		[1, 0, 0, 0, 0, 0, 0, 0, 1],
-		[1, 0, 0, 0, 0, 0, 0, 1, 0],
-		[1, 0, 0, 0, 0, 0, 1, 0, 0],
+
+class Parameters:
+	batch_size = 32
+	mem_size = 25000
+
+	epsilon_min = 0.05
+	epsilon_decay = 0.001
+	epsilon = 1
+	discount_factor = 0.9
+	learning_rate = 0.001
+
+	hold_down = 8
+
+	nodes = (256, 64)
+
+	render = False
+	verbose = False
+	target = False
+	directory = None
+
+
+class Runner:
+	GAME = "TinyToonAdventures-Nes"		# Running custom integration files
+	ACTION_SPACE = np.array([
+		[0, 0, 0, 0, 0, 0, 0, 0, 0],	# Nothing
+		[0, 0, 0, 0, 0, 0, 0, 0, 1],	# Jump
+		[0, 0, 0, 0, 0, 0, 0, 1, 0],	# Right
+		[0, 0, 0, 0, 0, 0, 1, 0, 0],	# Left
+		[0, 0, 0, 0, 0, 1, 0, 0, 0],	# Down
+		[1, 0, 0, 0, 0, 0, 0, 0, 1],	# Run jump
+		[1, 0, 0, 0, 0, 0, 0, 1, 0],	# Run right
+		[1, 0, 0, 0, 0, 0, 1, 0, 0],	# Run left
 	])
 
-	env = retro.make(game="TinyToonAdventures-Nes")	# running custom integrations
-	state = Resampler.total(env.reset())
+	def __init__(self, param):
+		self.param = param
+		self.env = retro.make(game=self.GAME)
 
-	agent = Test(env, state.size)
-	batch_size = 64
+		state = Resampler.total(self.env.reset())
 
-	ZERO = np.zeros(3, dtype=int)
+		mb = ModelBuilder(self.param.nodes, state.shape, self.ACTION_SPACE.shape[0], self.param.learning_rate)
+		target_mb = ModelBuilder(self.param.nodes, state.shape, self.ACTION_SPACE.shape[0], self.param.learning_rate)
+		if not self.param.target:
+			target_mb.model = None
 
-	i = -1
-	while True:
-		i += 1
-		state = Resampler.total(env.reset())
-		rew_handler = Reward()
+		self.agent = Agent(self.param, self.env, mb.model, (state.shape, self.ACTION_SPACE.shape[0]), target_model=target_mb.model)
+		self.episode = 0
 
-		done = False
-		j = -1
-		score = 0
-		while not done:
-			j += 1
-			#if j % 100 == 0 and j > 0:
-			#	print(f"Timestep {j}: {info}, {subrew}")
-			#	print(action, q_val)
+	def load(self):
+		with open(f"{self.param.directory}/stats.csv", "rb") as file:
+			file.seek(-2, os.SEEK_END)
+			while file.read(1) != b"\n":
+				file.seek(-2, os.SEEK_CUR)
+			latest = file.readline().decode()
 
-			if j % 1 == 0:
-				env.render()
+		vals = latest.split(",")
+		self.episode = int(vals[0])
+		self.param.epsilon = float(vals[3])
 
-			action, q_val = agent.action(state, i)
+		self.agent.model = keras.models.load_model(f"{self.param.directory}/model")
+		if self.param.target is not None:
+			self.agent.sync_models()
 
-			subrew = 0
+	def save(self, ticks, avg_loss, score):
+		if self.param.directory is None:
+			return
 
-			# Hold button for 6 frames, then observe
-			for _ in range(6):
-				next_state, _, done, info = env.step(action_space[action])
-				rew = rew_handler.compute_reward(info)
-				subrew += rew
-				score += rew
+		if self.param.verbose:
+			print(f"Saving training data in {self.param.directory}")
 
-			#for _ in range(2):
-			#	next_state, _, done, info = env.step(ZERO)
-			#	rew = rew_handler.compute_reward(info)
-			#	subrew += rew
-			#	score += rew
+		self.agent.model.save(f"{self.param.directory}/model")
+		with open(f"{self.param.directory}/stats.csv", "a") as file:
+			file.write(f"{self.episode},{ticks},{score},{self.param.epsilon},{avg_loss}\n")
 
-			next_state = Resampler.total(next_state)
+	def run(self, cnt=-1):
+		cond = lambda i: i < cnt if cnt > -1 else True
 
-			if info.get("lives") == 1:
-				done = True
+		while cond(self.episode):
+			rew_handler = Reward()
+			state = Resampler.total(self.env.reset())
 
-			agent.mem.store(state, action, rew, next_state, done)
+			score = 0
+			ticks = 0
+			total_loss = 0
+			done = False
 
-			state = next_state
-			agent.train(batch_size)
+			while not done:
+				tick_reward = 0
+				action, q_val = self.agent.action(state, (self.param.epsilon_min, self.param.epsilon))
 
-		print(f"Episode {i}, score {score}, {info}")
+				if self.param.render:
+					self.env.render()
 
-"""
-while True:
-	obs, rew, done, info = env.step(env.action_space.sample())
+				# Hold button down
+				for _ in range(self.param.hold_down):
+					next_state, _, done, info = self.env.step(self.ACTION_SPACE[action])
+					rew = rew_handler.compute_reward(info)
 
-	env.render()
+					tick_reward += rew
 
-	if done:
-		obs = env.reset()
-		env.close()
-		break
-"""
+				next_state = Resampler.total(next_state)
+
+				if info.get("deathstate") == 3 or ticks >= 250:
+					if info.get("deathstate") == 3:
+						tick_reward -= 0
+					done = True
+
+				self.agent.mem.store(state, action, tick_reward, next_state, done)
+				loss = self.agent.train(self.param.batch_size)
+
+				state = next_state
+				score += tick_reward
+				if loss is not None:
+					total_loss += loss
+				ticks += 1
+
+				if self.param.verbose:
+					print(f"Action={action}, predicted_q={q_val}, tick_rew={tick_reward}, score={score}, info={info}, loss={loss}")
+
+			if self.param.target and self.agent.mem.ready(self.param.batch_size):
+				self.agent.sync_models()
+
+			print(f"Epsiode {self.episode}; Score: {score}; Epsilon: {self.param.epsilon}; Avg loss {total_loss / ticks}")
+
+			self.episode += 1
+			if self.param.epsilon > self.param.epsilon_min:
+				self.param.epsilon -= self.param.epsilon_decay
+				if self.param.epsilon < self.param.epsilon_min:
+					self.param.epsilon = self.param.epsilon_min
+
+			self.save(ticks, total_loss / ticks, score)
+
+
+def main(argv):
+	ACTION = None
+	try:
+		opts, args = getopt.getopt(argv[1:], "", [ \
+			"new",
+			"verbose",
+			"render",
+			"load",
+			"save",
+
+			"batch-size=",
+			"epsilon=",
+			"epsilon-min=",
+			"epsilon-decay=",
+			"hold-down=",
+			"memory-size=",
+			"learning-rate=",
+			"discount=",
+
+			"target"
+		])
+	except getopt.GetoptError as e:
+		print(f"Unknown argument `{e.opt}`. Please refer to `{argv[0]} --help` for available arguments.")
+		sys.exit(1)
+
+	param = Parameters()
+
+	for opt, arg in opts:
+		if opt == "--new":
+			ACTION = "new"
+		elif opt == "--load":
+			ACTION = "load"
+		elif opt == "--save":
+			if len(args) == 0:
+				print(f"Usage: {argv[0]} --save [--opts] directory")
+				sys.exit(1)
+
+			param.directory = args[0]
+		elif opt == "--verbose":
+			param.verbose = True
+		elif opt == "--render":
+			param.render = True
+
+		elif opt == "--batch-size":
+			param.batch_size = int(arg)
+		elif opt == "--epsilon":
+			param.epsilon = float(arg)
+		elif opt == "--epsilon-min":
+			param.epsilon_min = float(arg)
+		elif opt == "--epsilon-decay":
+			param.epsilon_decay = float(arg)
+		elif opt == "--hold-down":
+			param.hold_down = int(arg)
+		elif opt == "--memory-size":
+			param.mem_size = int(arg)
+		elif opt == "--learning-rate":
+			param.learning_rate = float(arg)
+		elif opt == "--discount":
+			param.discount_factor = float(arg)
+
+		elif opt == "--target":
+			param.target = True
+
+	runner = Runner(param)
+	if ACTION is None:
+		print(f"No action provided. Please refer to `{argv[0]} --help` for available actions.")
+		sys.exit(1)
+	elif ACTION == "new":
+		# Do nothing
+		pass
+	elif ACTION == "load":
+		if param.directory is None:
+			if len(args) == 0:
+				print(f"Usage: {argv[0]} --load [--opts] directory")
+				sys.exit(1)
+
+			param.directory = args[0]
+
+		runner.load()
+
+	runner.run()
 
 if __name__ == "__main__":
-	#tf.compat.v1.disable_eager_execution()
-	main()
+	main(sys.argv)
