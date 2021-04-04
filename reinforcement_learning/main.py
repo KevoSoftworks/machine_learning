@@ -142,7 +142,7 @@ class Resampler:
 		return arr.reshape((1, arr.size))
 
 	@staticmethod
-	def total(arr, idx=(0, 50)):
+	def total(arr, idx=(0, 70)):
 		return Resampler.reshape(Resampler.gray(Resampler.drop_sample(arr, idx=idx)))
 
 
@@ -174,7 +174,7 @@ class Reward:
 		return new_score
 
 	def compute_bounds(self, info):
-		size = 50
+		size = 70
 		xcenter = info.get("xpos") - info.get("screenx")
 
 		xleft = np.maximum(0, int(xcenter - size/2))
@@ -184,18 +184,18 @@ class Reward:
 
 
 class Parameters:
-	batch_size = 32
+	batch_size = 64
 	mem_size = 25000
 
 	epsilon_min = 0.1
-	epsilon_decay = 0.001
+	epsilon_decay = 0.0005
 	epsilon = 1
 	discount_factor = 0.9
 	learning_rate = 0.01
 
-	hold_down = 6
+	hold_down = 8
 
-	nodes = (100, 25)
+	nodes = (125, 50)
 
 	render = False
 	verbose = False
@@ -209,10 +209,11 @@ class Runner:
 	ACTION_SPACE = np.array([
 		[0, 0, 0, 0, 0, 0, 0, 0, 0],	# Nothing
 		[0, 0, 0, 0, 0, 0, 0, 0, 1],	# Jump
+		[0, 0, 0, 0, 0, 0, 0, 1, 1],	# Jump right
 		[0, 0, 0, 0, 0, 0, 0, 1, 0],	# Right
 		[0, 0, 0, 0, 0, 0, 1, 0, 0],	# Left
 		[0, 0, 0, 0, 0, 1, 0, 0, 0],	# Down
-		[1, 0, 0, 0, 0, 0, 0, 0, 1],	# Run jump
+		[1, 0, 0, 0, 0, 0, 0, 1, 1],	# Chad Run jump right (for the wall, since we dont have temporal memory)
 		[1, 0, 0, 0, 0, 0, 0, 1, 0],	# Run right
 		[1, 0, 0, 0, 0, 0, 1, 0, 0],	# Run left
 	])
