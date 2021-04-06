@@ -26,12 +26,18 @@ class Memory:
 
 		return self.cnt
 
-	def store(self, state, action, reward, new_state, done):
+	def store(self, state, action, reward, new_state, done, param=None):
 		self.state[self.cnt] = state
 		self.action[self.cnt] = action
-		self.reward[self.cnt] = reward
 		self.new_state[self.cnt] = new_state
 		self.done[self.cnt] = 1 - int(done)
+
+		if param is not None and param.temporal_reward == True and self._rdy:
+			self.reward[self.cnt] = reward / 2
+			self.reward[self.cnt - 1] = reward / 4
+			self.reward[self.cnt - 2] = reward / 4
+		else:
+			self.reward[self.cnt] = reward
 
 		self.cnt = (self.cnt + 1) % self.mem_size
 
@@ -106,8 +112,8 @@ class Agent:
 
 		states, actions, rewards, new_states, done = self.mem.read(batch_size)
 
-		#states = states.reshape((*states.shape, 1))
-		#new_states = new_states.reshape((*states.shape, 1))
+		#states = states.reshape((batch_size, states.shape[2]))
+		#new_states = new_states.reshape((batch_size, states.shape[2]))
 
 		q_now = self.model.predict_on_batch(states)
 		if self.target_model is None:
@@ -142,7 +148,7 @@ class Resampler:
 		return arr.reshape((1, arr.size))
 
 	@staticmethod
-	def total(arr, idx=(0, 70)):
+	def total(arr, idx=(0, 50)):
 		return Resampler.reshape(Resampler.gray(Resampler.drop_sample(arr, idx=idx)))
 
 
@@ -174,7 +180,7 @@ class Reward:
 		return new_score
 
 	def compute_bounds(self, info):
-		size = 70
+		size = 50
 		xcenter = info.get("xpos") - info.get("screenx")
 
 		xleft = np.maximum(0, int(xcenter - size/2))
@@ -187,13 +193,13 @@ class Parameters:
 	batch_size = 64
 	mem_size = 25000
 
-	epsilon_min = 0.1
-	epsilon_decay = 0.0005
+	epsilon_min = 0.2
+	epsilon_decay = 0.0025
 	epsilon = 1
 	discount_factor = 0.9
-	learning_rate = 0.01
+	learning_rate = 0.001
 
-	hold_down = 8
+	hold_down = 1
 
 	nodes = (125, 50)
 
@@ -202,6 +208,7 @@ class Parameters:
 	target = False
 	save = False
 	directory = None
+	temporal_reward = True
 
 
 class Runner:
@@ -286,7 +293,7 @@ class Runner:
 
 				next_state = Resampler.total(next_state, rew_handler.compute_bounds(info))
 
-				if info.get("deathstate") == 3 or ticks >= 250:
+				if info.get("deathstate") == 3 or ticks >= 50*60:
 					if info.get("deathstate") == 3:
 						tick_reward -= 0
 					done = True
