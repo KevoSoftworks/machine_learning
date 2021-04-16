@@ -193,22 +193,24 @@ class Parameters:
 	batch_size = 64
 	mem_size = 25000
 
-	epsilon_min = 0.2
-	epsilon_decay = 0.0025
+	epsilon_min = 0.1
+	epsilon_decay = 0.001
 	epsilon = 1
 	discount_factor = 0.9
 	learning_rate = 0.001
 
 	hold_down = 1
+	ticks = 50*60
 
 	nodes = (125, 50)
 
+	train = True
 	render = False
 	verbose = False
 	target = False
 	save = False
 	directory = None
-	temporal_reward = True
+	temporal_reward = False
 
 
 class Runner:
@@ -279,6 +281,7 @@ class Runner:
 
 			while not done:
 				tick_reward = 0
+				loss = 0
 				action, q_val = self.agent.action(state, (self.param.epsilon_min, self.param.epsilon))
 
 				if self.param.render:
@@ -293,13 +296,14 @@ class Runner:
 
 				next_state = Resampler.total(next_state, rew_handler.compute_bounds(info))
 
-				if info.get("deathstate") == 3 or ticks >= 50*60:
+				if info.get("deathstate") == 3 or ticks >= self.param.ticks:
 					if info.get("deathstate") == 3:
 						tick_reward -= 0
 					done = True
 
-				self.agent.mem.store(state, action, tick_reward, next_state, done)
-				loss = self.agent.train(self.param.batch_size)
+				if self.param.train:
+					self.agent.mem.store(state, action, tick_reward, next_state, done)
+					loss = self.agent.train(self.param.batch_size)
 
 				state = next_state
 				score += tick_reward
@@ -310,7 +314,7 @@ class Runner:
 				if self.param.verbose:
 					print(f"Action={action}, predicted_q={q_val}, tick_rew={tick_reward}, score={score}, info={info}, loss={loss}, deltax={info.get('xpos') - info.get('screenx')}")
 
-			if self.param.target and self.agent.mem.ready(self.param.batch_size):
+			if self.param.target and self.agent.mem.ready(self.param.batch_size) and self.param.train:
 				self.agent.sync_models()
 
 			print(f"Epsiode {self.episode}; Score: {score}; Epsilon: {self.param.epsilon}; Avg loss {total_loss / ticks}")
@@ -342,8 +346,11 @@ def main(argv):
 			"memory-size=",
 			"learning-rate=",
 			"discount=",
+			"ticks=",
 
-			"target"
+			"target",
+			"temporal",
+			"no-train"
 		])
 	except getopt.GetoptError as e:
 		print(f"Unknown argument `{e.opt}`. Please refer to `{argv[0]} --help` for available arguments.")
@@ -384,9 +391,15 @@ def main(argv):
 			param.learning_rate = float(arg)
 		elif opt == "--discount":
 			param.discount_factor = float(arg)
+		elif opt == "--ticks":
+			param.ticks = int(arg)
 
 		elif opt == "--target":
 			param.target = True
+		elif opt == "--temporal":
+			param.temporal_reward = True
+		elif opt == "--no-train":
+			param.train = False
 
 	runner = Runner(param)
 	if ACTION is None:
